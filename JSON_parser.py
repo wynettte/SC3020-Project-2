@@ -20,20 +20,11 @@ KEEP_KEYS: set[str] = {
     "Actual Total Time",
     "Actual Rows",
     "Actual Loops",
-    "Parallel Aware",
+    # "Parallel Aware",
     "Plans",
 }
 
 def extract_node(raw_node: dict[str, Any]) -> dict[str, Any]:
-    """
-    Recursively extract a single plan node, keeping only KEEP_KEYS.
-
-    Params:
-    - raw_node: A single node dict from the parsed JSON 
-
-    Returns:
-    - dict with the same structure but only the fields in KEEP_KEYS.
-    """
     node: dict[str, Any] = {}
 
     for key in KEEP_KEYS:
@@ -71,81 +62,11 @@ def parse_explain_json(text: str) -> dict[str, Any]:
     return result
 
 
-SAMPLE_INPUT = json.dumps([
-    {
-        "Plan": {
-            "Node Type": "Hash Join",
-            "Parallel Aware": False,
-            "Join Type": "Inner",
-            "Startup Cost": 35.52,
-            "Total Cost": 120.50,
-            "Plan Rows": 150,
-            "Plan Width": 64,
-            "Actual Startup Time": 1.234,
-            "Actual Total Time": 5.678,
-            "Actual Rows": 142,
-            "Actual Loops": 1,
-            "Hash Cond": "(C.c_custkey = O.o_custkey)",
-            "Plans": [
-                {
-                    "Node Type": "Seq Scan",
-                    "Parallel Aware": False,
-                    "Relation Name": "customer",
-                    "Alias": "C",
-                    "Startup Cost": 0.00,
-                    "Total Cost": 50.00,
-                    "Plan Rows": 1500,
-                    "Plan Width": 32,
-                    "Actual Startup Time": 0.012,
-                    "Actual Total Time": 0.456,
-                    "Actual Rows": 1500,
-                    "Actual Loops": 1
-                },
-                {
-                    "Node Type": "Hash",
-                    "Parallel Aware": False,
-                    "Startup Cost": 25.00,
-                    "Total Cost": 25.00,
-                    "Plan Rows": 800,
-                    "Plan Width": 32,
-                    "Actual Startup Time": 0.800,
-                    "Actual Total Time": 1.200,
-                    "Actual Rows": 800,
-                    "Actual Loops": 1,
-                    "Plans": [
-                        {
-                            "Node Type": "Seq Scan",
-                            "Parallel Aware": False,
-                            "Relation Name": "orders",
-                            "Alias": "O",
-                            "Startup Cost": 0.00,
-                            "Total Cost": 60.00,
-                            "Plan Rows": 3000,
-                            "Plan Width": 16,
-                            "Actual Startup Time": 0.010,
-                            "Actual Total Time": 0.900,
-                            "Actual Rows": 3000,
-                            "Actual Loops": 1
-                        }
-                    ]
-                }
-            ]
-        },
-        "Planning Time": 2.345,
-        "Execution Time": 6.789
-    }
-], indent=2)
-
-
 def main() -> None:
-    if len(sys.argv) > 1:
-        path = sys.argv[1]
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-        source = path
-    else:
-        text = SAMPLE_INPUT
-        source = "built-in sample"
+    path = sys.argv[1]
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    source = path
 
     print(f"Parsing: {source}\n")
 
