@@ -142,9 +142,22 @@ def generate_plans(query):
         ]
     }
 
-result = generate_plans(query)
 
-print(json.dumps(result, indent=2))
+if __name__ == "__main__":
 
-cur.close()
-conn.close()
+    try:
+        # Call logic
+        result = generate_plans(query)
+        
+        # Print formatted JSON
+        print(json.dumps(result, indent=2))
+        
+    except Exception as e:
+        print(f"Error during execution: {e}")
+        
+    finally:
+        # Clean up resources
+        if 'cur' in locals() or 'cur' in globals():
+            cur.close()
+        if 'conn' in locals() or 'conn' in globals():
+            conn.close()
