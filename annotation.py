@@ -106,6 +106,12 @@ def _walk_node(node: dict, aqps_list: list, out: list):
             ),
             detail={"cost": node.get("Total Cost")},
         ))
+
+    filter_clause = node.get("Filter")
+    if filter_clause and not _is_scan(node_type):
+        ann = _annotate_filter(node, filter_clause)
+        if ann:
+            out.append(ann)
  
     for child in node.get("Plans", []):
         _walk_node(child, aqps_list, out)
@@ -286,9 +292,9 @@ def _find_join_node_type(node: dict) -> Optional[str]:
         if result is not None:
             return result
     return None
-def _annotate_join(node: dict, aqps: dict) -> Optional[Annotation]:
-    
+
 # explains which join algorithm was used and why (cost vs alternatives).
+def _annotate_join(node: dict, aqps: dict) -> Optional[Annotation]:
     
     node_type  = node.get("Node Type", "")   
     qep_cost   = node.get("Total Cost", 0)
@@ -331,7 +337,7 @@ def _annotate_join(node: dict, aqps: dict) -> Optional[Annotation]:
     cost_parts = []
     cost_detail = {"qep_cost": qep_cost, "alternatives": {}}
  
-    for aqp_entry in aqps_list:
+    for aqp_entry in aqps:
         settings     = aqp_entry.get("settings", {})
         aqp_node     = aqp_entry.get("qep", {})
         label        = _label_for_aqp(settings)
@@ -364,6 +370,26 @@ def _annotate_join(node: dict, aqps: dict) -> Optional[Annotation]:
         text=base + why,
         detail=cost_detail,
     ) 
+
+# filter annotator that explains how many rows got removed after an operation e.g. join
+def _annotate_filter(node: dict, filter_clause: str) -> Optional[Annotation]:
+    node_type    = node.get("Node Type", "")
+    rows_removed = node.get("Rows Removed by Filter", "")
+ 
+    text = (
+        f"A filter ({filter_clause}) is applied at the '{node_type}' node. "
+        "Rows that do not satisfy this condition are discarded before being "
+        "passed to the next stage of the plan. "
+    )
+    if rows_removed:
+        text += f"{rows_removed} rows were removed by this filter."
+ 
+    return Annotation(
+        ann_type="filter",
+        target=filter_clause,
+        text=text,
+        detail={"node_type": node_type, "rows_removed": rows_removed},
+    )
 
 # sort annotator
 def _annotate_sort(node: dict) -> Optional[Annotation]:
