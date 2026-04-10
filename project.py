@@ -12,7 +12,7 @@ def process_query(query: str):
     ]
 }
     # [1] Generate QEP + AQPs
-    #plans_result = generate_plans(query)
+    plans_result = generate_plans(query)
     # Extract main plan bundle
     plan_bundle = plans_result["plans"][0]
 
