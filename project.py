@@ -1,64 +1,36 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-
 from aqp import generate_plans
-from annotation import _annotate_scan, _annotate_join
+from annotation import annotate_query
 
-app = FastAPI()
-
-# Request Schema
-class QueryRequest(BaseModel):
-    query: str
-
-# Traverse Plan Tree
-def traverse_plan(node, aqps, annotations):
-    if not isinstance(node, dict):
-        return
-
-    node_type = node.get("Node Type", "")
-
-    # Scan Annotation
-    if "Scan" in node_type:
-        ann = _annotate_scan(node)
-        if ann:
-            annotations.append(ann.__dict__)
-
-    # Join Annotation
-    if "Join" in node_type or node_type == "Nested Loop":
-        ann = _annotate_join(node, aqps)
-        if ann:
-            annotations.append(ann.__dict__)
-
-    for child in node.get("Plans", []):
-        traverse_plan(child, aqps, annotations)
-
-
-# Core Pipeline
 def process_query(query: str):
-    # [1] Get QEP + [2] AQPs
-    plans_result = generate_plans(query)
 
+    plans_result = {
+    "plans": [
+        {
+            "qep": {"Plan": "Seq Scan"},
+            "aqps": [{"Plan": "Index Scan"}]
+        }
+    ]
+}
+    # [1] Generate QEP + AQPs
+    #plans_result = generate_plans(query)
+    # Extract main plan bundle
     plan_bundle = plans_result["plans"][0]
+
+    # PostgreSQL optimizer selects the default plan
     qep = plan_bundle["qep"]
-    aqps = {
-        f"AQP_{i}": aqp["qep"]
-        for i, aqp in enumerate(plan_bundle["aqps"])
-    }
+    # Planner configuration generates a list of alternative plans
+    aqps_list = plan_bundle["aqps"]
 
-    # [3] Generate annotations
-    annotations = []
-    traverse_plan(qep, aqps, annotations)
+    # [2] Generate annotations from QEP + AQPs
+    annotations = annotate_query(qep, aqps_list)
 
-    # [4] Final JSON output
+    # [3] Convert annotations to JSON format
+    annotations_dict = [ann.__dict__ for ann in annotations]
+
+    # Final JSON output
     return {
         "query": query,
         "qep": qep,
-        "aqps": aqps,
-        "annotations": annotations
+        "aqps": aqps_list,
+        "annotations": annotations_dict
     }
-
-# API Endpoint
-@app.post("/analyze")
-def analyze(request: QueryRequest):
-    result = process_query(request.query)
-    return result
