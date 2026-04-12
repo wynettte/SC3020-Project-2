@@ -1,36 +1,57 @@
-from aqp import generate_plans
+# Orchestration layer — ties preprocessing and annotation together.
+
+from __future__ import annotations
+
+
+from dotenv import load_dotenv
+load_dotenv()
+
+from dataclasses import asdict
+from typing import Any
+
+from preprocessing import generate_plans
 from annotation import annotate_query
 
-def process_query(query: str):
 
-    plans_result = {
-    "plans": [
-        {
-            "qep": {"Plan": "Seq Scan"},
-            "aqps": [{"Plan": "Index Scan"}]
-        }
-    ]
-}
-    # [1] Generate QEP + AQPs
-    plans_result = generate_plans(query)
-    # Extract main plan bundle
-    plan_bundle = plans_result["plans"][0]
+def process_query(query: str) -> dict[str, Any]:
+    """
+    Full pipeline for a single SQL query:
 
-    # PostgreSQL optimizer selects the default plan
-    qep = plan_bundle["qep"]
-    # Planner configuration generates a list of alternative plans
-    aqps_list = plan_bundle["aqps"]
+      1. preprocessing.generate_plans  — connect to PostgreSQL, run EXPLAIN
+         under default and alternative planner settings, deduplicate plans.
+      2. annotation.annotate_query     — walk the chosen QEP tree and produce
+         human-readable Annotation objects for each interesting node.
 
-    # [2] Generate annotations from QEP + AQPs
-    annotations = annotate_query(qep, aqps_list)
+    Return shape
+    ------------
+    {
+        "qep": <filtered QEP plan node>,
+        "aqps": [
+            {"settings": {...}, "qep": <filtered plan node>},
+            ...
+        ],
+        "annotations": [
+            {
+                "ann_type": "scan" | "join" | "sort" | "aggregate" | "filter" |
+                            "subquery" | "limit",
+                "target":   "<SQL fragment>",
+                "text":     "<human-readable explanation>",
+                "detail":   { ... }
+            },
+            ...
+        ]
+    }
+    """
+    # Step 1 — generate QEP and AQPs from the database
+    plans = generate_plans(query)
+    qep_node  = plans["qep"]
+    aqps_list = plans["aqps"]
 
-    # [3] Convert annotations to JSON format
-    annotations_dict = [ann.__dict__ for ann in annotations]
+    # Step 2 — annotate the chosen QEP against the AQPs
+    annotations = annotate_query(qep_node, aqps_list)
 
-    # Final JSON output
     return {
-        "query": query,
-        "qep": qep,
-        "aqps": aqps_list,
-        "annotations": annotations_dict
+        "qep":         qep_node,
+        "aqps":        aqps_list,
+        "annotations": [asdict(ann) for ann in annotations],
     }
