@@ -75,7 +75,7 @@ def _build_operator_info(annotations: list[dict]) -> Dict[str, OperatorInfo]:
         info[op_id] = OperatorInfo(
             name=ann["target"] or ann["ann_type"],
             what=ann["text"],
-            why=ann["detail"].get("node_type", ann["ann_type"]),
+            why=ann.get("reasoning", ""),
             alternatives=str(ann["detail"].get("alternatives", "")),
             impact=f"Cost: {ann['detail'].get('cost', 'N/A')}",
         )
