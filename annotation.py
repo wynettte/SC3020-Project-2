@@ -104,6 +104,11 @@ def _walk_node(node: dict, aqps_list: list, out: list[Annotation]) -> None:
         if ann:
             out.append(ann)
 
+    elif node_type == "Hash":
+        ann =_annotate_hash(node)
+        if ann:
+            out.append(ann)
+
     elif node_type == "Sort":
         ann = _annotate_sort(node)
         if ann:
@@ -464,6 +469,23 @@ def _annotate_filter(node: dict, filter_clause: str) -> Optional[Annotation]:
         detail={"node_type": node_type, "rows_removed": rows_removed},
     )
 
+def _annotate_hash(node: dict) -> Optional[Annotation]:
+    """Explain what the Hash node does and why it is present."""
+    return Annotation(
+        ann_type="hash",
+        target="Hash",
+        text=(
+            "PostgreSQL reads all rows from the child scan and loads them "
+            "into an in-memory hash table in preparation for the Hash Join above."
+        ),
+        reasoning=(
+            "Hash is not chosen independently — it is always introduced as a "
+            "required preparation step when the planner selects a Hash Join. "
+            "The smaller of the two relations is hashed so that the larger "
+            "relation can probe it row by row efficiently during the join."
+        ),
+        detail={"cost": node.get("Total Cost")},
+    )
 
 def _annotate_sort(node: dict) -> Optional[Annotation]:
     """Explain why a Sort node is present and what it sorts on."""
