@@ -10,6 +10,7 @@ import html
 import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+from annotation import _is_join
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
@@ -71,34 +72,50 @@ def _build_operator_info(annotations: list[dict]) -> Dict[str, OperatorInfo]:
     """Convert annotation dicts from process_query into OperatorInfo objects."""
     info: Dict[str, OperatorInfo] = {}
     for ann in annotations:
-        op_id = f"{ann['ann_type']}_{ann['target'].replace(' ', '_')}"
+        ann_type = ann["ann_type"]
+        detail   = ann.get("detail", {})
+
+        if ann_type == "join":
+            node_type = detail.get("node_type", ann_type)
+            op_id     = f"join_{node_type.replace(' ', '_')}"
+            name      = node_type
+        else:
+            op_id = f"{ann_type}_{ann['target'].replace(' ', '_')}"
+            name  = ann["target"] or ann_type
+ 
         info[op_id] = OperatorInfo(
-            name=ann["target"] or ann["ann_type"],
+            name=name,
             what=ann["text"],
             why=ann.get("reasoning", ""),
-            alternatives=str(ann["detail"].get("alternatives", "")),
-            impact=f"Cost: {ann['detail'].get('cost', 'N/A')}",
+            alternatives=str(detail.get("alternatives", "")),
+            impact=f"Cost: {detail.get('cost', 'N/A')}",
         )
     return info
 
 
 def _build_qep_tree_model(qep_node: dict, annotations: list[dict]) -> dict:
     """Recursively convert a filtered QEP plan node into the tree-model shape."""
-    ann_index: Dict[str, str] = {
-        ann["target"]: f"{ann['ann_type']}_{ann['target'].replace(' ', '_')}"
-        for ann in annotations
-    }
+    ann_index: Dict[str, str] = {}
+    for ann in annotations:
+        if ann["ann_type"] == "join":
+            continue  # joins are resolved by node_type directly below
+        op_id = f"{ann['ann_type']}_{ann['target'].replace(' ', '_')}"
+        ann_index[ann["target"]] = op_id
 
     def _convert(node: dict) -> dict:
         node_type  = node.get("Node Type", "Unknown")
         table_name = node.get("Relation Name") or node.get("Alias") or ""
         label      = f"{node_type} ({table_name})" if table_name else node_type
         cost       = str(node.get("Total Cost", "N/A"))
-        op_id      = (
-            ann_index.get(table_name)
-            or ann_index.get(node_type)
-            or label.replace(" ", "_")
-        )
+        if _is_join(node_type):
+            # Must match the key used in _build_operator_info for joins
+            op_id = f"join_{node_type.replace(' ', '_')}"
+        else:
+            op_id = (
+                ann_index.get(table_name)
+                or ann_index.get(node_type)
+                or label.replace(" ", "_")
+            )
         return {
             "op_id":    op_id,
             "label":    label,

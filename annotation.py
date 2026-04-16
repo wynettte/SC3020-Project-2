@@ -1,3 +1,4 @@
+# annotation.py
 # Walks a QEP plan tree and produces one Annotation per interesting node.
 
 from __future__ import annotations
@@ -17,20 +18,20 @@ class Annotation:
 
     Attributes
     ----------
-    ann_type : category — "scan" | "join" | "sort" | "aggregate" |
-                          "filter" | "subquery" | "limit"
-    target   : the SQL fragment this annotation describes, e.g.
-                 "customer"               (for a scan)
-                 "C.c_custkey = O.o_custkey"  (for a join)
-    text     : human-readable description (What)
-    reasoning: human-readable reasoning (Why)
-    detail   : optional extra detail (e.g. cost breakdown dict)
+    ann_type  : category — "scan" | "join" | "sort" | "aggregate" |
+                           "filter" | "subquery" | "limit"
+    target    : the SQL fragment this annotation describes, e.g.
+                  "customer"                    (for a scan)
+                  "C.c_custkey = O.o_custkey"   (for a join)
+    text      : human-readable description (WHAT)
+    reasoning : human-readable reasoning   (WHY)
+    detail    : optional extra detail (e.g. cost breakdown dict)
     """
-    ann_type: str
-    target:   str
-    text:     str
+    ann_type:  str
+    target:    str
+    text:      str
     reasoning: str = ""
-    detail:   dict = field(default_factory=dict)
+    detail:    dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +172,6 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
     if node_type == "Seq Scan":
         filter_clause = node.get("Filter", "")
         rows_removed  = node.get("Rows Removed by Filter", "")
- 
         text = (
             f"'{table_name}' is read using a Sequential Scan — PostgreSQL "
             "reads every row in the table from start to finish."
@@ -183,10 +183,9 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
             )
             if rows_removed:
                 text += f" {rows_removed} rows were discarded by this filter."
- 
         reasoning = (
             "A sequential scan is chosen because either no suitable index "
-            "exists on the queried column(s) and the table is small enough that "
+            "exists on the queried column(s), the table is small enough that "
             "reading it fully is cheaper than an index lookup, or a large "
             "proportion of rows must be returned making index overhead unnecessary."
         )
@@ -194,15 +193,13 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
     elif node_type == "Index Scan":
         index = node.get("Index Name", "an index")
         cond  = node.get("Index Cond", "")
- 
-        text = (
+        text  = (
             f"'{table_name}' is accessed using an Index Scan on '{index}'. "
             "PostgreSQL first looks up matching entries in the B-tree index, "
             "then follows the reference to fetch the full row from the heap table."
         )
         if cond:
             text += f" The index condition evaluated is: {cond}."
- 
         reasoning = (
             "An index scan is chosen because the query targets a small subset "
             "of rows and an appropriate index exists on the lookup column(s). "
@@ -214,7 +211,6 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
     elif node_type == "Index Only Scan":
         index      = node.get("Index Name", "an index")
         heap_fetch = node.get("Heap Fetches", 0)
- 
         text = (
             f"'{table_name}' uses an Index Only Scan on '{index}'. "
             "All columns required by the query are stored within the index "
@@ -227,7 +223,6 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
                 f" {heap_fetch} heap page(s) were still fetched to verify "
                 "visibility for recently modified rows."
             )
- 
         reasoning = (
             "An index only scan is the most efficient access path: because "
             "all required columns exist in the index, heap I/O is eliminated "
@@ -238,7 +233,6 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
     elif node_type == "Bitmap Heap Scan":
         recheck      = node.get("Recheck Cond", "")
         rows_removed = node.get("Rows Removed by Filter", "")
- 
         text = (
             f"'{table_name}' uses a Bitmap Heap Scan (phase 2 of 2). "
             "Using the bitmap built in phase 1, PostgreSQL fetches only the "
@@ -248,7 +242,6 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
             text += f" The condition '{recheck}' is rechecked on each heap row fetched."
         if rows_removed:
             text += f" {rows_removed} rows were removed after the recheck filter."
- 
         reasoning = (
             "A bitmap scan is chosen when the query matches too many rows for "
             "a plain index scan (whose random I/O would be expensive) but not "
@@ -260,15 +253,13 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
     elif node_type == "Bitmap Index Scan":
         index = node.get("Index Name", "an index")
         cond  = node.get("Index Cond", "")
- 
-        text = (
+        text  = (
             f"Bitmap Index Scan on '{index}' (phase 1 of 2). "
             "PostgreSQL scans the index to build an in-memory bitmap marking "
             "which heap pages may contain matching rows."
         )
         if cond:
             text += f" Index condition used to build the bitmap: {cond}."
- 
         reasoning = (
             "The bitmap is passed to the Bitmap Heap Scan above, which uses it "
             "to fetch only the marked pages in physical order — avoiding the "
@@ -278,47 +269,40 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
 
     elif node_type == "Parallel Seq Scan":
         workers = node.get("Workers Planned", "multiple")
- 
         text = (
             f"'{table_name}' uses a Parallel Sequential Scan with {workers} "
             "background worker(s). PostgreSQL divides the table into chunks "
             "and scans each chunk concurrently, combining results at a Gather node."
         )
- 
         reasoning = (
             "Parallel execution is chosen because the table is large enough "
             "that dividing the work across multiple CPU cores reduces total "
             "elapsed time, even after accounting for the coordination overhead "
             "of launching workers and merging their results."
         )
- 
+
     elif node_type == "Parallel Index Scan":
         index   = node.get("Index Name", "an index")
         workers = node.get("Workers Planned", "multiple")
- 
         text = (
             f"'{table_name}' uses a Parallel Index Scan on '{index}' "
             f"with {workers} background worker(s). Each worker reads a "
             "different portion of the index concurrently, and results are "
             "gathered at the end."
         )
- 
         reasoning = (
             "Parallel index scanning is chosen when both the index and the "
             "table are very large and parallel execution is estimated to be "
-            "faster than a single-worker index scan. It requires the planner "
-            "to determine that the per-worker index ranges do not overlap."
+            "faster than a single-worker index scan."
         )
- 
+
     elif node_type == "Function Scan":
         fn = node.get("Function Name", "?")
- 
         text = (
             f"Rows are produced by calling the set-returning function '{fn}'. "
             "PostgreSQL executes the function and iterates over its output "
             "as if it were a table."
         )
- 
         reasoning = (
             f"The query references '{fn}' directly in the FROM clause as a "
             "table-valued function. PostgreSQL has no base table to scan, so "
@@ -326,9 +310,9 @@ def _annotate_scan(node: dict) -> Optional[Annotation]:
         )
 
     else:
-            text      = f"'{display}' is accessed using {node_type}."
-            reasoning = ""
- 
+        text      = f"'{display}' is accessed using {node_type}."
+        reasoning = ""
+
     return Annotation(
         ann_type="scan",
         target=table_name,
@@ -378,32 +362,35 @@ def _annotate_join(node: dict, aqps: list) -> Optional[Annotation]:
     )
 
     if node_type == "Hash Join":
-        base = (
+        text = (
             "This join uses Hash Join. "
             "PostgreSQL builds a hash table from the smaller relation, "
-            "then probes it with each row from the larger relation. "
+            "then probes it with each row from the larger relation."
         )
     elif node_type == "Merge Join":
-        base = (
+        text = (
             "This join uses Merge Join. "
             "Both input relations must be sorted on the join key; "
-            "PostgreSQL then merges them in a single pass. "
+            "PostgreSQL then merges them in a single pass."
         )
     elif node_type == "Nested Loop":
-        base = (
+        text = (
             "This join uses Nested Loop. "
-            "For each row in the outer relation, PostgreSQL scans the inner "
-            "relation."
+            "For each row in the outer relation, PostgreSQL scans the inner relation."
         )
     else:
-        base = f"This join uses {node_type}."
+        text = f"This join uses {node_type}."
 
     if condition:
-        base += f" Join condition: {condition}."
+        text += f" Join condition: {condition}."
 
     # WHY: cost comparison against AQPs
     cost_parts: list[str] = []
-    cost_detail: dict = {"qep_cost": qep_cost, "alternatives": {}}
+    cost_detail: dict = {
+        "node_type":    node_type,   # stored here so interface.py can build the op_id key
+        "qep_cost":     qep_cost,
+        "alternatives": {},
+    }
 
     for aqp_entry in aqps:
         settings      = aqp_entry.get("settings", {})
@@ -457,17 +444,17 @@ def _annotate_filter(node: dict, filter_clause: str) -> Optional[Annotation]:
     text = (
         f"A filter ({filter_clause}) is applied at the '{node_type}' node. "
         "Rows that do not satisfy this condition are discarded before being "
-        "passed to the next stage of the plan. "
+        "passed to the next stage of the plan."
     )
     if rows_removed:
-        text += f"{rows_removed} rows were removed by this filter."
+        text += f" {rows_removed} rows were removed by this filter."
 
     reasoning = (
         "This filter cannot be pushed down to the scan level — for example, "
         "it may reference a computed column, a join result, or an expression "
         "that is only available after earlier plan nodes have executed. "
         "PostgreSQL therefore applies it here, as late as possible."
-    )    
+    )
 
     return Annotation(
         ann_type="filter",
@@ -482,16 +469,15 @@ def _annotate_sort(node: dict) -> Optional[Annotation]:
     """Explain why a Sort node is present and what it sorts on."""
     keys     = node.get("Sort Key", [])
     keys_str = ", ".join(keys) if keys else "unknown columns"
- 
+
     text = f"Results are sorted by [{keys_str}]."
- 
     reasoning = (
         "An explicit sort step is introduced because the data arriving at "
         "this node is not already in the required order. This may be needed "
         "to satisfy an ORDER BY clause, to prepare input for a following "
         "Merge Join, or to group rows for a GroupAggregate."
     )
- 
+
     return Annotation(
         ann_type="sort",
         target=keys_str,
@@ -506,7 +492,7 @@ def _annotate_aggregate(node: dict) -> Optional[Annotation]:
     node_type  = node.get("Node Type", "Aggregate")
     group_keys = node.get("Group Key", [])
     keys_str   = ", ".join(group_keys) if group_keys else ""
- 
+
     if node_type == "HashAggregate":
         text = (
             "Hash Aggregate: PostgreSQL builds a hash table keyed on the "
@@ -536,12 +522,12 @@ def _annotate_aggregate(node: dict) -> Optional[Annotation]:
             "based on the estimated input size, available memory, and whether "
             "the data is already ordered on the grouping columns."
         )
- 
+
     if keys_str:
         text += f" Grouping by: [{keys_str}]."
     else:
         text += " No GROUP BY — all rows are aggregated into a single result."
- 
+
     return Annotation(
         ann_type="aggregate",
         target=keys_str,
