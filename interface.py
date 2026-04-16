@@ -8,6 +8,7 @@ load_dotenv()
 
 import html
 import sys
+import re #test=========================================================
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from annotation import _is_join
@@ -125,18 +126,72 @@ def _build_qep_tree_model(qep_node: dict, annotations: list[dict]) -> dict:
 
     return _convert(qep_node)
 
-
 def _build_sql_badge_replacements(annotations: list[dict], raw_sql: str) -> List[dict]:
-    """Map annotation targets that appear verbatim in the SQL to clickable badges."""
     replacements: List[dict] = []
+
+    join_node_type = None
+
     for ann in annotations:
-        target = ann["target"]
-        if target and target in raw_sql:
-            op_id = f"{ann['ann_type']}_{target.replace(' ', '_')}"
-            replacements.append({
-                "match":  target,
-                "badges": [{"op_id": op_id, "badge_text": ann["ann_type"].capitalize()}],
+        if ann["ann_type"] == "join":
+            join_node_type = ann.get("detail", {}).get("node_type", "Join")
+
+    for ann in annotations:
+        target = ann.get("target", "")
+        if not target:
+            continue
+
+        if target.lower() not in raw_sql.lower():
+            continue
+
+        ann_type = ann["ann_type"]
+        detail   = ann.get("detail", {})
+
+        badges = []
+
+        if ann_type == "scan":
+            node_type = detail.get("node_type", "Scan")
+            table     = target
+
+            op_id = f"scan_{table.replace(' ', '_')}"
+
+            badges.append({
+                "op_id": op_id,
+                "badge_text": f"{node_type} ({table})"
             })
+
+            replacements.append({
+                "match": target,
+                "badges": badges
+            })
+
+        elif ann_type == "join" and join_node_type:
+            op_id = f"join_{join_node_type.replace(' ', '_')}"
+
+            on_matches = re.findall(
+                r"\bON\b\s+[^()]+?(?=\bJOIN\b|\bWHERE\b|\bGROUP\b|\bORDER\b|$)",
+                raw_sql,
+                re.IGNORECASE
+            )
+
+            for on_clause in on_matches:
+                replacements.append({
+                    "match": on_clause.strip(),
+                    "badges": [{
+                        "op_id": op_id,
+                        "badge_text": join_node_type
+                    }]
+                })
+
+        else:
+            op_id = f"{ann_type}_{target.replace(' ', '_')}"
+            replacements.append({
+                "match": target,
+                "badges": [{
+                    "op_id": op_id,
+                    "badge_text": ann_type.capitalize()
+                }]
+            })
+
     return replacements
 
 
