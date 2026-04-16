@@ -31,7 +31,7 @@ PGPORT=5432
 
 ## Running the Application
 
-### Ensure PostgreSQL is running, then start the GUI:
+### Start the GUI:
 ```bash
 python interface.py
 ```
