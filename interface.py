@@ -896,7 +896,10 @@ class SqlQepComprehensionUI(QMainWindow):
         self.sql_stack.setCurrentWidget(self.sql_input_editor)
         self.sql_input_editor.setReadOnly(False)
         self.current_active_op_id = None
-        self.qep_tree.clearSelection()
+        # Reset QEP tree widgets back to an empty state.
+        # Disabling selection alone leaves stale items visible after reset.
+        self.qep_tree.clear()
+        self.tree_items_by_op.clear()
         self.qep_tree.setEnabled(False)
         self.qep_diagram.set_analysis_ready(False)
         self.qep_diagram.set_active(None)
