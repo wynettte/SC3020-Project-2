@@ -393,8 +393,27 @@ class QepDiagramWidget(QWidget):
         painter.setBrush(fill)
         painter.drawRoundedRect(rect, 20, 20)
         painter.setPen(QColor("#1f2937"))
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        text_flags = Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap
+        target_rect = rect.toRect().adjusted(10, 8, -10, -8)
+
+        # Keep node labels readable on smaller, non-fullscreen windows by
+        # shrinking the font until the wrapped text fits the node.
+        max_size = 12.0 if self.window().isFullScreen() else 10.5
+        min_size = 8.0
+        font = QFont("Segoe UI", weight=QFont.Weight.DemiBold)
+        chosen_size = min_size
+        size = max_size
+        while size >= min_size:
+            font.setPointSizeF(size)
+            bounds = painter.fontMetrics().boundingRect(target_rect, int(text_flags), text)
+            if bounds.width() <= target_rect.width() and bounds.height() <= target_rect.height():
+                chosen_size = size
+                break
+            size -= 0.5
+
+        font.setPointSizeF(chosen_size)
+        painter.setFont(font)
+        painter.drawText(target_rect, int(text_flags), text)
 
     def mousePressEvent(self, event) -> None:
         pos = event.position()
