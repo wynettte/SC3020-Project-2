@@ -1,10 +1,7 @@
-# Orchestration layer — ties preprocessing and annotation together.
-
 from __future__ import annotations
 
-
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv() # Loads the database credentials and the environment variables from .env file
 
 from dataclasses import asdict
 from typing import Any
@@ -14,42 +11,23 @@ from annotation import annotate_query
 
 
 def process_query(query: str) -> dict[str, Any]:
-    """
-    Full pipeline for a single SQL query:
-
-      1. preprocessing.generate_plans  — connect to PostgreSQL, run EXPLAIN
-         under default and alternative planner settings, deduplicate plans.
-      2. annotation.annotate_query     — walk the chosen QEP tree and produce
-         human-readable Annotation objects for each interesting node.
-
-    Return shape
-    ------------
-    {
-        "qep": <filtered QEP plan node>,
-        "aqps": [
-            {"settings": {...}, "qep": <filtered plan node>},
-            ...
-        ],
-        "annotations": [
-            {
-                "ann_type": "scan" | "join" | "sort" | "aggregate" | "filter" |
-                            "subquery" | "limit",
-                "target":   "<SQL fragment>",
-                "text":     "<human-readable explanation>",
-                "detail":   { ... }
-            },
-            ...
-        ]
-    }
-    """
-    # Step 1 — generate QEP and AQPs from the database
+    # Generate the query plans
+    # It connects PostgreSQL and will run EXPLAIN under different settings which collects
+    # both of the QEP and AQPs
     plans = generate_plans(query)
+    
+    # Extract out the main QEP
     qep_node  = plans["qep"]
+
+    # Extract out the AQPs
     aqps_list = plans["aqps"]
 
-    # Step 2 — annotate the chosen QEP against the AQPs
+    # Generate the annotations
+    # Traverse QEP and compare with AQPs for explanation
     annotations = annotate_query(qep_node, aqps_list)
 
+    # Format the output
+    # Converts annotation objects into dictionaries
     return {
         "qep":         qep_node,
         "aqps":        aqps_list,
