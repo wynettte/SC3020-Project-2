@@ -555,5 +555,5 @@ def _annotate_aggregate(node: dict) -> Optional[Annotation]:
         target=keys_str,
         text=text,
         reasoning=reasoning,
-        detail={"group_keys": group_keys, "cost": node.get("Total Cost")},
+        detail={"node_type": node_type, "group_keys": group_keys, "cost": node.get("Total Cost")},
     )
