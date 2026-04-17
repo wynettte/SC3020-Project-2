@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QTabWidget,
     QScrollArea,
+    QSizePolicy,
 )
 
 # ---------------------------------------------------------------------------
@@ -935,9 +936,9 @@ class SqlQepComprehensionUI(QMainWindow):
 
         cards_row = QHBoxLayout()
         cards_row.setSpacing(10)
-        self.what_card, self.what_card_body = self._create_explain_card("WHAT (Execution)")
-        self.why_card,  self.why_card_body  = self._create_explain_card("WHY (Decision)")
-        self.alt_card,  self.alt_card_body  = self._create_explain_card("ALTERNATIVES (Comparison / AQP)")
+        self.what_card, self.what_card_body, _ = self._create_explain_card("WHAT (Execution)")
+        self.why_card,  self.why_card_body,  _ = self._create_explain_card("WHY (Decision)")
+        self.alt_card,  self.alt_card_body, self.alt_card_body_scroll = self._create_explain_card("ALTERNATIVES (Comparison / AQP)")
         self.what_card.setObjectName("WhatCard")
         self.why_card.setObjectName("WhyCard")
         self.alt_card.setObjectName("AltCard")
@@ -955,6 +956,10 @@ class SqlQepComprehensionUI(QMainWindow):
         self.plan_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.plan_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.plan_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.plan_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.plan_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.plan_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.plan_table.setMinimumHeight(120)
         self.plan_table.cellClicked.connect(self._handle_plan_row_clicked)
         self.plan_table.verticalHeader().setVisible(False)
         self.plan_table.horizontalHeader().setStretchLastSection(True)
@@ -1069,7 +1074,7 @@ class SqlQepComprehensionUI(QMainWindow):
         lbl.setProperty("role", "panelTitle")
         return lbl
 
-    def _create_explain_card(self, title: str) -> tuple[QFrame, QLabel]:
+    def _create_explain_card(self, title: str) -> tuple[QFrame, QLabel, QScrollArea]:
         card = QFrame()
         card.setProperty("role", "explainCard")
         layout = QVBoxLayout(card)
@@ -1090,7 +1095,7 @@ class SqlQepComprehensionUI(QMainWindow):
         body_scroll.setFrameShape(QFrame.Shape.NoFrame)
         layout.addWidget(title_lbl)
         layout.addWidget(body_scroll, 1)
-        return card, body_lbl
+        return card, body_lbl, body_scroll
 
     # -----------------------------------------------------------------------
     # Data binding
@@ -1180,8 +1185,11 @@ class SqlQepComprehensionUI(QMainWindow):
             self.alt_card.setVisible(True)
             if not self.qep_diagram.analysis_ready:
                 self.alt_card_body.setText("Run Analyse to generate plan comparison (AQP).")
+                self.alt_card_body_scroll.setVisible(True)
                 self.plan_table.setVisible(False)
                 return
+            self.alt_card_body.setText("")
+            self.alt_card_body_scroll.setVisible(False)
             self.plan_table.setVisible(True)
             if self.plan_table.rowCount() == 0:
                 self._populate_plan_comparison_table()
@@ -1222,7 +1230,6 @@ class SqlQepComprehensionUI(QMainWindow):
                 self.plan_table.setItem(idx, c, item)
         if rows:
             self.plan_table.selectRow(0)
-        self._fit_plan_table_height()
 
     def _handle_plan_row_clicked(self, _row: int, _col: int) -> None:
         pass  # reserved for future per-row detail expansion
@@ -1313,6 +1320,7 @@ class SqlQepComprehensionUI(QMainWindow):
         self.qep_tree.setEnabled(True)
         self.qep_diagram.set_analysis_ready(True)
         self.qep_diagram.set_active(None)
+        self._refresh_explanation_ui()
         self.analyse_btn.setEnabled(True)
         self.statusBar().showMessage("Analysis complete. Click an annotation or QEP node.")
 
