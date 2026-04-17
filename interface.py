@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QStackedWidget,
     QTabWidget,
+    QScrollArea,
 )
 
 # ---------------------------------------------------------------------------
@@ -601,7 +602,7 @@ class QepDiagramWidget(QWidget):
         self.node_rects:    Dict[str, QRectF] = {}
         self.analysis_ready = False
         self.tree_model:    Optional[dict] = None
-        self.setMinimumHeight(280)
+        self.setMinimumSize(360, 280)
 
     def set_analysis_ready(self, ready: bool) -> None:
         self.analysis_ready = ready
@@ -613,6 +614,12 @@ class QepDiagramWidget(QWidget):
 
     def set_tree_model(self, tree_model: dict) -> None:
         self.tree_model = tree_model
+        ids_by_level, _ = self._collect_levels_and_edges()
+        depth = max(1, len(ids_by_level))
+        max_cols = max((len(level) for level in ids_by_level), default=1)
+        canvas_w = max(360, max_cols * 240 + 120)
+        canvas_h = max(280, depth * 150 + 80)
+        self.setMinimumSize(canvas_w, canvas_h)
         self.update()
 
     # -- layout helpers --
@@ -883,7 +890,14 @@ class SqlQepComprehensionUI(QMainWindow):
 
         self.qep_diagram = QepDiagramWidget()
         self.qep_diagram.nodeClicked.connect(self._handle_diagram_node_clicked)
-        self.qep_tabs.addTab(self.qep_diagram, "Visual Tree")
+        self.qep_diagram_scroll = QScrollArea()
+        self.qep_diagram_scroll.setWidgetResizable(True)
+        self.qep_diagram_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.qep_diagram_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.qep_diagram_scroll.setObjectName("QepDiagramScroll")
+        self.qep_diagram_scroll.setWidget(self.qep_diagram)
+        self.qep_diagram_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.qep_tabs.addTab(self.qep_diagram_scroll, "Visual Tree")
         self.qep_tabs.setCurrentIndex(1)
 
         right_layout.addWidget(self.qep_tabs, 1)
@@ -959,6 +973,58 @@ class SqlQepComprehensionUI(QMainWindow):
             QStackedWidget, QTextEdit, QTreeWidget, QPlainTextEdit, QTextBrowser {
                 background: #ffffff; border: 1px solid #dbe3ef; border-radius: 10px;
             }
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollArea#QepDiagramScroll {
+                background: #f8fbff;
+                border: 1px solid #cfd9e8;
+                border-radius: 8px;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #b9c9df;
+                min-height: 28px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #96acc8;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                width: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+            QScrollBar:horizontal {
+                background: transparent;
+                height: 10px;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #b9c9df;
+                min-width: 28px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #96acc8;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                height: 0px;
+                width: 0px;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: transparent;
+            }
+            QScrollArea > QWidget > QWidget {
+                background: transparent;
+            }
             QPlainTextEdit, QTextBrowser, QTextEdit, QTreeWidget {
                 border: 1px solid #cfd9e8; border-radius: 8px; background: #fbfdff;
                 color: #0f172a; padding: 6px; font-size: 13px;
@@ -1004,8 +1070,15 @@ class SqlQepComprehensionUI(QMainWindow):
         body_lbl.setProperty("role", "explainCardBody")
         body_lbl.setWordWrap(True)
         body_lbl.setTextFormat(Qt.TextFormat.RichText)
+        body_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        body_scroll = QScrollArea()
+        body_scroll.setWidgetResizable(True)
+        body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        body_scroll.setWidget(body_lbl)
+        body_scroll.setFrameShape(QFrame.Shape.NoFrame)
         layout.addWidget(title_lbl)
-        layout.addWidget(body_lbl, 1)
+        layout.addWidget(body_scroll, 1)
         return card, body_lbl
 
     # -----------------------------------------------------------------------
