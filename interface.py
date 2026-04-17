@@ -8,6 +8,7 @@ load_dotenv()
 
 import html
 import sys
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from annotation import _is_join
@@ -81,7 +82,10 @@ def _build_operator_info(annotations: list[dict]) -> Dict[str, OperatorInfo]:
             name      = node_type
         else:
             op_id = f"{ann_type}_{ann['target'].replace(' ', '_')}"
-            name  = ann["target"] or ann_type
+            if ann_type == "scan" and detail.get("node_type") and ann["target"]:
+                name = f"{detail['node_type']} ({ann['target']})"
+            else:
+                name = ann["target"] or ann_type
  
         info[op_id] = OperatorInfo(
             name=name,
@@ -125,70 +129,160 @@ def _build_qep_tree_model(qep_node: dict, annotations: list[dict]) -> dict:
 
     return _convert(qep_node)
 
-def _build_sql_badge_replacements(annotations: list[dict], raw_sql: str) -> List[dict]:
+def _get_hashed_tables(qep_node: dict) -> set:
+    """
+    Walk the QEP tree and return a set of lowercase table/relation names
+    that appear as the direct child scan of a Hash node (i.e. the build side
+    of a Hash Join).
+    """
+    hashed: set = set()
+
+    def _walk(node: dict) -> None:
+        if node.get("Node Type") == "Hash":
+            for child in node.get("Plans", []):
+                table = child.get("Relation Name") or child.get("Alias", "")
+                if table:
+                    hashed.add(table.lower())
+        for child in node.get("Plans", []):
+            _walk(child)
+
+    _walk(qep_node)
+    return hashed
+
+
+def _build_sql_badge_replacements(
+    annotations: list[dict],
+    raw_sql: str,
+    qep_node: dict | None = None,
+) -> List[dict]:
+    """
+    Map annotations onto SQL fragments so the annotated SQL view can render
+    clickable badges.
+
+    Badge placement rules
+    ---------------------
+    • Scan     → anchored to the full FROM/JOIN clause that introduces the table.
+                 Handles all JOIN variants (INNER/LEFT/RIGHT/FULL OUTER/CROSS/NATURAL),
+                 schema-qualified names (public.orders), and optional AS aliases.
+                 If the table is the Hash-Join build side a [Hash] badge is co-located.
+    • Subquery → anchored to the subquery alias in the FROM clause.
+    • Join     → anchored to each ON <condition> clause.
+    • Other    → anchored to the literal target text (fallback).
+    """
     replacements: List[dict] = []
 
-    join_node_type = None
+    # All JOIN variants that can appear before the JOIN keyword
+    _JOIN_PREFIX = (
+        r'(?:(?:INNER|LEFT(?:\s+OUTER)?|RIGHT(?:\s+OUTER)?'
+        r'|FULL(?:\s+OUTER)?|CROSS|NATURAL)\s+)?'
+    )
+
+    # Collect all join annotations in order (multiple joins in one query each
+    # get their own annotation from annotate_query).
+    join_annotations = [a for a in annotations if a["ann_type"] == "join"]
+
+    # Tables that are the build side of a Hash Join (direct child of Hash node)
+    hashed_tables: set = _get_hashed_tables(qep_node) if qep_node else set()
 
     for ann in annotations:
-        if ann["ann_type"] == "join":
-            join_node_type = ann.get("detail", {}).get("node_type", "Join")
-
-    for ann in annotations:
-        target = ann.get("target", "")
-        if not target:
-            continue
-
-        if target.lower() not in raw_sql.lower():
-            continue
-
+        target   = ann.get("target", "")
         ann_type = ann["ann_type"]
         detail   = ann.get("detail", {})
 
-        badges = []
-
+        # ── Scan annotation ──────────────────────────────────────────────────
         if ann_type == "scan":
-            node_type = detail.get("node_type", "Scan")
             table     = target
+            node_type = detail.get("node_type", "Scan")
+            op_id     = f"scan_{table.replace(' ', '_')}"
 
-            op_id = f"scan_{table.replace(' ', '_')}"
-
-            badges.append({
-                "op_id": op_id,
-                "badge_text": f"{node_type} ({table})"
-            })
-
-            replacements.append({
-                "match": target,
-                "badges": badges
-            })
-
-        elif ann_type == "join" and join_node_type:
-            op_id = f"join_{join_node_type.replace(' ', '_')}"
-
-            on_matches = re.findall(
-                r"\bON\b\s+[^()]+?(?=\bJOIN\b|\bWHERE\b|\bGROUP\b|\bORDER\b|$)",
-                raw_sql,
-                re.IGNORECASE
+            # Match any FROM/JOIN variant with optional schema prefix and alias:
+            #   FROM public.orders o
+            #   LEFT OUTER JOIN orders AS o
+            #   CROSS JOIN orders
+            pattern = re.compile(
+                r'('
+                + _JOIN_PREFIX
+                + r'(?:FROM|JOIN)\s+'
+                + r'(?:\w+\.)?'          # optional schema prefix
+                + re.escape(table)
+                + r'(?:\s+(?:AS\s+)?\w+)?'   # optional [AS] alias
+                + r')',
+                re.IGNORECASE,
             )
+            m = pattern.search(raw_sql)
+            if not m:
+                # Fallback: bare table name anywhere in the SQL
+                if table.lower() not in raw_sql.lower():
+                    continue
+                badges: List[dict] = [{"op_id": op_id, "badge_text": f"{node_type} ({table})"}]
+                replacements.append({"match": table, "badges": badges})
+                continue
 
-            for on_clause in on_matches:
+            matched_text = m.group(1)
+            badges = [{"op_id": op_id, "badge_text": f"{node_type} ({table})"}]
+
+            # [Hash] badge goes on the actual build-side table (from the QEP tree)
+            if table.lower() in hashed_tables:
+                badges.append({"op_id": "hash_Hash", "badge_text": "Hash"})
+
+            replacements.append({"match": matched_text, "badges": badges})
+
+        # ── Subquery annotation ───────────────────────────────────────────────
+        elif ann_type == "subquery":
+            alias = target
+            op_id = f"subquery_{alias.replace(' ', '_')}"
+
+            # Match "(SELECT ...) [AS] alias" — the alias is what PostgreSQL uses
+            # as the Subquery Scan relation name.
+            sub_pattern = re.compile(
+                r'(\(\s*SELECT\b[^()]*(?:\([^()]*\)[^()]*)*\)\s*(?:AS\s+)?'
+                + re.escape(alias)
+                + r'\b)',
+                re.IGNORECASE | re.DOTALL,
+            )
+            m = sub_pattern.search(raw_sql)
+            if m:
                 replacements.append({
-                    "match": on_clause.strip(),
-                    "badges": [{
-                        "op_id": op_id,
-                        "badge_text": join_node_type
-                    }]
+                    "match":  m.group(1),
+                    "badges": [{"op_id": op_id, "badge_text": f"Subquery ({alias})"}],
+                })
+            elif alias.lower() in raw_sql.lower():
+                # Fallback: just highlight the alias name
+                replacements.append({
+                    "match":  alias,
+                    "badges": [{"op_id": op_id, "badge_text": f"Subquery ({alias})"}],
                 })
 
-        else:
+        # ── Join annotation ───────────────────────────────────────────────────
+        elif ann_type == "join":
+            join_node_type = detail.get("node_type", "Join")
+            op_id          = f"join_{join_node_type.replace(' ', '_')}"
+
+            # Collect every ON clause in the SQL, one per JOIN.
+            # The lookahead stops at the next JOIN keyword (any variant),
+            # a top-level clause keyword, or end of string.
+            on_matches = re.findall(
+                r'(ON\s+[^\n]+?)'
+                r'(?=\s*(?:WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|'
+                + _JOIN_PREFIX
+                + r'JOIN|$))',
+                raw_sql,
+                re.IGNORECASE,
+            )
+            for on_clause in on_matches:
+                replacements.append({
+                    "match":  on_clause.strip(),
+                    "badges": [{"op_id": op_id, "badge_text": join_node_type}],
+                })
+
+        # ── Everything else (sort, aggregate, filter, limit, …) ─────────────
+        elif ann_type != "hash":   # Hash is co-located with its scan badge above
+            if not target or target.lower() not in raw_sql.lower():
+                continue
             op_id = f"{ann_type}_{target.replace(' ', '_')}"
             replacements.append({
-                "match": target,
-                "badges": [{
-                    "op_id": op_id,
-                    "badge_text": ann_type.capitalize()
-                }]
+                "match":  target,
+                "badges": [{"op_id": op_id, "badge_text": ann_type.capitalize()}],
             })
 
     return replacements
@@ -238,7 +332,7 @@ def get_analysis_data(query: str) -> AnalysisData:
 
     operator_info          = _build_operator_info(annotations)
     qep_tree_model         = _build_qep_tree_model(qep_node, annotations)
-    sql_badge_replacements = _build_sql_badge_replacements(annotations, query)
+    sql_badge_replacements = _build_sql_badge_replacements(annotations, query, qep_node)
     chosen_plan_id, plan_comparisons = _build_plan_comparisons(aqps, qep_node)
 
     return AnalysisData(
@@ -825,7 +919,7 @@ class SqlQepComprehensionUI(QMainWindow):
         for rep in self.sql_badge_replacements:
             escaped_match = html.escape(rep["match"])
             badge_parts   = [
-                f"<a class='sql-tag' href='op://{b['op_id']}' "
+                f"<a class='sql-tag' href='op:///{b['op_id']}' "
                 f"style='{self._badge_style(active_op_id == b['op_id'])}'>"
                 f"[{b['badge_text']}]</a>"
                 for b in rep.get("badges", [])
@@ -904,7 +998,7 @@ class SqlQepComprehensionUI(QMainWindow):
         self.statusBar().showMessage("Reset to SQL input mode.")
 
     def _handle_sql_anchor_clicked(self, url: QUrl) -> None:
-        op_id = url.toString().replace("op://", "").strip()
+        op_id = url.path().lstrip("/")
         if op_id:
             self._set_active_operator(op_id, source="sql")
 
