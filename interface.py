@@ -743,9 +743,20 @@ class QepDiagramWidget(QWidget):
         target_rect = rect.toRect().adjusted(10, 8, -10, -8)
 
         # Keep node labels readable on smaller, non-fullscreen windows by
-        # shrinking the font until the wrapped text fits the node.
-        max_size = 12.0 if self.window().isFullScreen() else 10.5
-        min_size = 8.0
+        # using a lower base font size and then shrinking until text fits.
+        if self.window().isFullScreen():
+            max_size = 12.0
+            min_size = 8.0
+        else:
+            view_w = self.width()
+            max_size = 10.0
+            if view_w < 900:
+                max_size = 9.2
+            if view_w < 760:
+                max_size = 8.6
+            if len(text) > 40:
+                max_size -= 0.4
+            min_size = 7.0
         font = QFont("Segoe UI", weight=QFont.Weight.DemiBold)
         chosen_size = min_size
         size = max_size
