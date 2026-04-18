@@ -74,55 +74,58 @@ class AnalysisData:
 def _build_operator_info(
     annotations: list[dict], qep_node: dict | None = None
 ) -> Dict[str, OperatorInfo]:
-    """Convert annotation dicts from process_query into OperatorInfo objects."""
+    # Annotation dictionaries are turned into OperatorInfo objects which are used by frontend
     info: Dict[str, OperatorInfo] = {}
 
-    # Walk QEP in DFS order and record, for every Hash node, the direct-child
-    # table name (leaf hash) or "" (non-leaf hash whose child is a join).
-    # The list order matches the order hash annotations are produced by _walk_node,
-    # so we can pop one entry per hash annotation to get a consistent op_id.
     hash_table_seq: list[str] = []
-    hash_nl_idx = 0   # counter for non-leaf Hash nodes
+    hash_nl_idx = 0   # To uniquely name the non-leaf hash nodes
     if qep_node:
         def _collect_hash_seq(node: dict) -> None:
+            # If it is a Hash node, then try to find its direct child table
             if node.get("Node Type") == "Hash":
                 child_table = ""
                 for child in node.get("Plans", []):
+                    # Prefers Relation Name, fallback to Alias
                     child_table = child.get("Relation Name") or child.get("Alias", "")
                     if child_table:
                         break
-                hash_table_seq.append(child_table)   # "" if non-leaf
+                # If no table is found, this will be a non-leaf hash which stores ""
+                hash_table_seq.append(child_table)
+            # Continue the DFS traversal
             for child in node.get("Plans", []):
                 _collect_hash_seq(child)
         _collect_hash_seq(qep_node)
 
+    # Iterator over only for the "hash" annotations in an order
     hash_ann_iter = iter([a for a in annotations if a["ann_type"] == "hash"])
-    join_idx = 0
+    join_idx = 0 # A counter to make the join IDs unique
 
     for ann in annotations:
         ann_type = ann["ann_type"]
         detail   = ann.get("detail", {})
 
         if ann_type == "join":
+            # Build a unique and readable ID for each of the join operator
             node_type = detail.get("node_type", ann_type)
             op_id     = f"join_{node_type.replace(' ', '_')}_{join_idx}"
             name      = node_type
             join_idx += 1
 
         elif ann_type == "hash":
-            # Pop the pre-computed table name for this Hash node (DFS order).
-            # Leaf hash (child is a Scan) → "hash_{table}"; matches the SQL badge.
-            # Non-leaf hash (child is a Join) → "hash_nl_{idx}"; unique, no SQL badge.
+            # Match the hash annotation together with the precomputed sequence
             table = hash_table_seq.pop(0) if hash_table_seq else ""
             if table:
+                # Leaf hash will be tied to a specific table
                 op_id = f"hash_{table}"
                 name  = f"Hash ({table})"
             else:
+                # Non-lead hash will just give it a unique running index
                 op_id = f"hash_nl_{hash_nl_idx}"
                 hash_nl_idx += 1
                 name  = "Hash"
 
         else:
+            # A generic handling for scan, aggregate, and others
             op_id = f"{ann_type}_{ann['target'].replace(' ', '_')}"
             if ann_type == "scan" and detail.get("node_type") and ann["target"]:
                 name = f"{detail['node_type']} ({ann['target']})"
@@ -130,63 +133,68 @@ def _build_operator_info(
                 keys = ann["target"]
                 name = f"{detail['node_type']} ({keys})" if keys else detail['node_type']
             else:
+                # Just use a target or type for fallback
                 name = ann["target"] or ann_type
 
+        # OperatorInfo object is being built
         info[op_id] = OperatorInfo(
             name=name,
-            what=ann["text"],
-            why=ann.get("reasoning", ""),
-            alternatives=str(detail.get("alternatives", "")),
-            impact=f"Cost: {detail.get('cost', 'N/A')}",
+            what=ann["text"], # The explanation of what the operator does
+            why=ann.get("reasoning", ""), # The reason of why the planner chose it
+            alternatives=str(detail.get("alternatives", "")), # Possible alternatives
+            impact=f"Cost: {detail.get('cost', 'N/A')}",    # Estimnated cost of impact
         )
     return info
 
 
 def _build_qep_tree_model(qep_node: dict, annotations: list[dict]) -> dict:
-    """Recursively convert a filtered QEP plan node into the tree-model shape."""
+    # It recursively converts a filtered QEP node into a tree structure for frontend
     ann_index: Dict[str, str] = {}
     for ann in annotations:
+        # Hashes and joins are being handled separately later, so skip them here for now
         if ann["ann_type"] in ("join", "hash"):
             continue  # joins/hashes resolved separately in _convert below
         op_id = f"{ann['ann_type']}_{ann['target'].replace(' ', '_')}"
-        # Primary key: the annotation target (used by scan nodes via Relation Name)
+        # To use the annotation target such as table name, as the main key
         ann_index[ann["target"]] = op_id
-        # Secondary key: capitalised ann_type (e.g. "Sort", "Limit") so that
-        # _convert can find the op_id via QEP node_type when there is no table name.
+        # To map the operator type such as Sort, Limit for nodes without the tables
         ann_index[ann["ann_type"].capitalize()] = op_id
-        # Tertiary key: exact node_type from detail (e.g. "HashAggregate") so
-        # aggregate variants are resolved correctly.
+        # Include the more specific node type
         node_type_detail = ann.get("detail", {}).get("node_type", "")
         if node_type_detail:
             ann_index[node_type_detail] = op_id
 
-    join_counter    = [0]   # mutable so the nested _convert closure can increment it
-    hash_nl_counter = [0]   # same for non-leaf Hash nodes
+    # Use lists so they can be updated inside the nested function for _convert
+    join_counter    = [0]
+    hash_nl_counter = [0]
 
     def _convert(node: dict) -> dict:
+        # Converts a single QEP node and its children into tree format
         node_type  = node.get("Node Type", "Unknown")
         table_name = node.get("Relation Name") or node.get("Alias") or ""
+        # Build a readable label
         label      = f"{node_type} ({table_name})" if table_name else node_type
         cost       = str(node.get("Total Cost", "N/A"))
         if _is_join(node_type):
-            # Index must match _build_operator_info (both are pre-order DFS)
+            # Assigns a unique ID to each of the joins
             op_id = f"join_{node_type.replace(' ', '_')}_{join_counter[0]}"
             join_counter[0] += 1
         elif node_type == "Hash":
-            # Leaf hash (child is a Scan): op_id = "hash_{table}" — matches badge.
-            # Non-leaf hash (child is a Join): op_id = "hash_nl_{counter}" — unique,
-            # no SQL badge but still selectable from the tree.
+            # Checks if the hash is diretly on the leaf or if it is on another operator
             child_table = ""
             for child in node.get("Plans", []):
                 child_table = child.get("Relation Name") or child.get("Alias", "")
                 if child_table:
                     break
             if child_table:
+                # Leaf hash is being tied to a specific table
                 op_id = f"hash_{child_table}"
             else:
+                # Non-leaf hash will be given a running index
                 op_id = f"hash_nl_{hash_nl_counter[0]}"
                 hash_nl_counter[0] += 1
         else:
+            # To use the label itself if no match has been found, as a fallback
             op_id = (
                 ann_index.get(table_name)
                 or ann_index.get(node_type)
@@ -196,25 +204,25 @@ def _build_qep_tree_model(qep_node: dict, annotations: list[dict]) -> dict:
             "op_id":    op_id,
             "label":    label,
             "cost":     cost,
+            # Recursively process the child nodes
             "children": [_convert(child) for child in node.get("Plans", [])],
         }
 
     return _convert(qep_node)
 
 def _get_hashed_tables(qep_node: dict) -> set:
-    """
-    Walk the QEP tree and return a set of lowercase table/relation names
-    that appear as the direct child scan of a Hash node (i.e. the build side
-    of a Hash Join).
-    """
     hashed: set = set()
 
     def _walk(node: dict) -> None:
+        # If it is a Hash node, then look at its children to look for the table that has been hashed
         if node.get("Node Type") == "Hash":
             for child in node.get("Plans", []):
+                # Tries to get the table name
                 table = child.get("Relation Name") or child.get("Alias", "")
                 if table:
+                    # Stores in lowercase to keep everything consistent
                     hashed.add(table.lower())
+        # Continue to traverse the rest of the tree
         for child in node.get("Plans", []):
             _walk(child)
 
@@ -227,38 +235,23 @@ def _build_sql_badge_replacements(
     raw_sql: str,
     qep_node: dict | None = None,
 ) -> List[dict]:
-    """
-    Map annotations onto SQL fragments so the annotated SQL view can render
-    clickable badges.
-
-    Badge placement rules
-    ---------------------
-    • Scan     → anchored to the full FROM/JOIN clause that introduces the table.
-                 Handles all JOIN variants (INNER/LEFT/RIGHT/FULL OUTER/CROSS/NATURAL),
-                 schema-qualified names (public.orders), and optional AS aliases.
-                 If the table is the Hash-Join build side a [Hash] badge is co-located.
-    • Subquery → anchored to the subquery alias in the FROM clause.
-    • Join     → anchored to each ON <condition> clause.
-    • Other    → anchored to the literal target text (fallback).
-    """
+    # Map the annotations to parts of the SQL string, and the frontend will show the clickable badges
     replacements: List[dict] = []
 
-    # All JOIN variants that can appear before the JOIN keyword
+    # Possible join prefixes
     _JOIN_PREFIX = (
         r'(?:(?:INNER|LEFT(?:\s+OUTER)?|RIGHT(?:\s+OUTER)?'
         r'|FULL(?:\s+OUTER)?|CROSS|NATURAL)\s+)?'
     )
 
-    # Collect all join annotations in order (multiple joins in one query each
-    # get their own annotation from annotate_query).
+    # Extract the join annotations in order
     join_annotations = [a for a in annotations if a["ann_type"] == "join"]
-    sql_join_idx = [0]   # mutable counter — incremented per join annotation
+    sql_join_idx = [0] # Use a list so that it can be updated inside the loops
 
-    # Tables that are the build side of a Hash Join (direct child of Hash node)
+    # These are the tables that have been used as the build side of a Hash Join
     hashed_tables: set = _get_hashed_tables(qep_node) if qep_node else set()
 
-    # Pre-compute per-Hash-node child table in DFS order (mirrors _build_operator_info)
-    # so we can assign the same op_ids for non-leaf Hash nodes.
+    # Precompute the sequence for the Hash nodes in DFS order, for the op_ids to stay consistent
     _hash_seq: list[str] = []
     _hash_nl_badge_idx = [0]
     if qep_node:
@@ -279,16 +272,13 @@ def _build_sql_badge_replacements(
         ann_type = ann["ann_type"]
         detail   = ann.get("detail", {})
 
-        # ── Scan annotation ──────────────────────────────────────────────────
+        # Scan
         if ann_type == "scan":
             table     = target
             node_type = detail.get("node_type", "Scan")
             op_id     = f"scan_{table.replace(' ', '_')}"
 
-            # Match any FROM/JOIN variant with optional schema prefix and alias:
-            #   FROM public.orders o
-            #   LEFT OUTER JOIN orders AS o
-            #   CROSS JOIN orders
+            # Try to match the full FROM/JOIN clause which introduces this table
             pattern = re.compile(
                 r'('
                 + _JOIN_PREFIX
@@ -304,7 +294,7 @@ def _build_sql_badge_replacements(
             )
             m = pattern.search(raw_sql)
             if not m:
-                # Fallback: bare table name anywhere in the SQL
+                # Highlights the table name if we cannot match the clause, as a fallback
                 if table.lower() not in raw_sql.lower():
                     continue
                 badges: List[dict] = [{"op_id": op_id, "badge_text": f"{node_type} ({table})"}]
@@ -314,20 +304,18 @@ def _build_sql_badge_replacements(
             matched_text = m.group(1)
             badges = [{"op_id": op_id, "badge_text": f"{node_type} ({table})"}]
 
-            # [Hash] badge goes on the actual build-side table (from the QEP tree).
-            # Use the table name in the op_id so each Hash badge is unique.
+            # If the table has been used in a Hash Join, then add a Hash badge beside it
             if table.lower() in hashed_tables:
                 badges.append({"op_id": f"hash_{table}", "badge_text": "Hash"})
 
             replacements.append({"match": matched_text, "badges": badges})
 
-        # ── Subquery annotation ───────────────────────────────────────────────
+        # Subquery
         elif ann_type == "subquery":
             alias = target
             op_id = f"subquery_{alias.replace(' ', '_')}"
 
-            # Match "(SELECT ...) [AS] alias" — the alias is what PostgreSQL uses
-            # as the Subquery Scan relation name.
+            # Try to match the alias for (SELECT ...)
             sub_pattern = re.compile(
                 r'(\(\s*SELECT\b[^()]*(?:\([^()]*\)[^()]*)*\)\s*(?:AS\s+)?'
                 + re.escape(alias)
@@ -341,23 +329,20 @@ def _build_sql_badge_replacements(
                     "badges": [{"op_id": op_id, "badge_text": f"Subquery ({alias})"}],
                 })
             elif alias.lower() in raw_sql.lower():
-                # Fallback: just highlight the alias name
+                # Highlight the alias only
                 replacements.append({
                     "match":  alias,
                     "badges": [{"op_id": op_id, "badge_text": f"Subquery ({alias})"}],
                 })
 
-        # ── Join annotation ───────────────────────────────────────────────────
+        # Join
         elif ann_type == "join":
-            # Each join annotation is processed in pre-order DFS (same order as
-            # _build_operator_info and _build_qep_tree_model), so we can simply
-            # use a counter to generate the same unique op_id in all three places.
+            # Keep the Join IDs consistent with the DFS order used elsewhere
             join_node_type = detail.get("node_type", "Join")
             op_id          = f"join_{join_node_type.replace(' ', '_')}_{sql_join_idx[0]}"
             sql_join_idx[0] += 1
 
-            # Collect all ON clauses and assign only the one at THIS annotation's
-            # index — prevents every join annotation from badging every ON clause.
+            # Match the ON clauses and assign one per join annotation
             on_matches = re.findall(
                 r'(ON\s+[^\n]+?)'
                 r'(?=\s*(?:WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|'
@@ -373,8 +358,7 @@ def _build_sql_badge_replacements(
                     "badges": [{"op_id": op_id, "badge_text": join_node_type}],
                 })
             else:
-                # No ON clause — join may be implicit (IN / EXISTS subquery).
-                # Collect all IN/EXISTS patterns and pick by adjusted index.
+                # Handle joins written as IN/EXISTS
                 implicit_matches = re.findall(
                     r'((?:WHERE|AND|OR|HAVING)\s+\w+(?:\.\w+)?\s+IN\s*\()',
                     raw_sql, re.IGNORECASE,
@@ -396,7 +380,7 @@ def _build_sql_badge_replacements(
                         "badges": [{"op_id": op_id, "badge_text": join_node_type}],
                     })
 
-        # ── Aggregate annotation ─────────────────────────────────────────────
+        # Aggregate
         elif ann_type == "aggregate":
             group_keys = detail.get("group_keys", [])
             node_type  = detail.get("node_type", "Aggregate")
@@ -406,9 +390,7 @@ def _build_sql_badge_replacements(
             matched = False
 
             if group_keys:
-                # Anchor to the GROUP BY clause.
-                # Build a pattern that matches GROUP BY followed by the exact
-                # keys in any order with flexible whitespace / comma spacing.
+                # Try to anchor to GROUP BY clause
                 keys_pattern = r'\s*,\s*'.join(re.escape(k) for k in group_keys)
                 group_by_re  = re.compile(
                     r'(GROUP\s+BY\s+' + keys_pattern + r')',
@@ -416,7 +398,7 @@ def _build_sql_badge_replacements(
                 )
                 m = group_by_re.search(raw_sql)
                 if not m:
-                    # Fallback: match GROUP BY up to the next clause keyword
+                    # Grab the whole GROUP BY section, as a fallback
                     m = re.search(
                         r'(GROUP\s+BY\s+(?:(?!HAVING|ORDER|LIMIT|UNION|$).)+)',
                         raw_sql, re.IGNORECASE | re.DOTALL,
@@ -428,7 +410,7 @@ def _build_sql_badge_replacements(
                     })
                     matched = True
 
-                # Also anchor to HAVING if present
+                # To attach to HAVING, if present
                 having_m = re.search(
                     r'(HAVING\s+(?:(?!ORDER|LIMIT|UNION|$).)+)',
                     raw_sql, re.IGNORECASE | re.DOTALL,
@@ -441,8 +423,7 @@ def _build_sql_badge_replacements(
                     matched = True
 
             else:
-                # Plain aggregate (no GROUP BY).
-                # 1. Try explicit aggregate function call (COUNT, SUM, …)
+                # If no GROUP BY, then look fro the aggregate functions
                 agg_fn_re = re.compile(
                     r'((?:COUNT|SUM|AVG|MAX|MIN)\s*\([^)]*\))',
                     re.IGNORECASE,
@@ -455,11 +436,6 @@ def _build_sql_badge_replacements(
                     })
                     matched = True
                 else:
-                    # 2. Aggregate introduced internally by PostgreSQL for an IN
-                    #    subquery (semi-join deduplication).
-                    #    Anchor to the same "WHERE ... IN (" fragment as the join
-                    #    badge — deduplication merges both into one badge group,
-                    #    avoiding the overlap / replacement-order problem.
                     in_clause_re = re.compile(
                         r'((?:WHERE|AND|OR|HAVING)\s+\w+(?:\.\w+)?\s+IN\s*\()',
                         re.IGNORECASE,
@@ -472,22 +448,18 @@ def _build_sql_badge_replacements(
                         })
                         matched = True
 
-            # Last-resort fallback
+            # Match the raw target text, as a final fallback
             if not matched and target and target.lower() in raw_sql.lower():
                 replacements.append({
                     "match":  target,
                     "badges": [{"op_id": op_id, "badge_text": badge_text}],
                 })
 
-        # ── Hash annotation (non-leaf only) ──────────────────────────────────
+        # Hash for non-leaf only
         elif ann_type == "hash":
-            # Leaf Hash nodes already get a badge co-located with their scan.
-            # Non-leaf Hash nodes (child is a Join/Aggregate) have no table anchor,
-            # so we place their badge on the nearest IN/EXISTS clause instead —
-            # the dedup step will merge it with the join/aggregate badges there.
             tbl = _hash_seq.pop(0) if _hash_seq else ""
             if not tbl:
-                # non-leaf hash
+                # Non-leaf hash nodes do not have a direct table, then anchor to IN/EXISTS
                 hash_nl_op_id = f"hash_nl_{_hash_nl_badge_idx[0]}"
                 _hash_nl_badge_idx[0] += 1
                 in_clause = re.findall(
@@ -505,8 +477,8 @@ def _build_sql_badge_replacements(
                         "badges": [{"op_id": hash_nl_op_id, "badge_text": "Hash"}],
                     })
 
-        # ── Everything else (sort, filter, limit, …) ─────────────────────────
-        elif ann_type not in ("hash",):   # leaf Hash badges co-located with scan
+        # Everything else
+        elif ann_type not in ("hash",):
             if not target or target.lower() not in raw_sql.lower():
                 continue
             op_id = f"{ann_type}_{target.replace(' ', '_')}"
@@ -515,8 +487,7 @@ def _build_sql_badge_replacements(
                 "badges": [{"op_id": op_id, "badge_text": ann_type.capitalize()}],
             })
 
-    # Deduplicate: merge badges when two annotations matched the same
-    # SQL fragment, preventing the double-badge bug in _render_annotated_sql.
+    # Deduplicate
     seen: dict = {}
     for rep in replacements:
         key = rep['match']
