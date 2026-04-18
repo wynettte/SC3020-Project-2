@@ -37,7 +37,7 @@ KEEP_KEYS: set[str] = {
 
 
 # ---------------------------------------------------------------------------
-# JSON parser (from JSON_parser.py)
+# JSON parser
 # ---------------------------------------------------------------------------
 
 def extract_node(raw_node: dict[str, Any]) -> dict[str, Any]:
@@ -82,7 +82,7 @@ def parse_explain_json(text: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Plan-generation helpers (from aqp.py)
+# Plan-generation helpers 
 # ---------------------------------------------------------------------------
 
 _JOIN_SETTINGS: list[dict] = [
