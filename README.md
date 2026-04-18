@@ -33,7 +33,7 @@ PGPORT=5432
 
 ### Start the GUI:
 ```bash
-python interface.py
+python project.py
 ```
 
 ---
