@@ -33,3 +33,8 @@ def process_query(query: str) -> dict[str, Any]:
         "aqps":        aqps_list,
         "annotations": [asdict(ann) for ann in annotations],
     }
+
+
+if __name__ == "__main__":
+    from interface import main
+    main()
