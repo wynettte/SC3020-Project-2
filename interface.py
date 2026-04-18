@@ -36,6 +36,8 @@ from PyQt6.QtWidgets import (
     QWidget,
     QStackedWidget,
     QTabWidget,
+    QScrollArea,
+    QSizePolicy,
 )
 
 # ---------------------------------------------------------------------------
@@ -601,7 +603,7 @@ class QepDiagramWidget(QWidget):
         self.node_rects:    Dict[str, QRectF] = {}
         self.analysis_ready = False
         self.tree_model:    Optional[dict] = None
-        self.setMinimumHeight(280)
+        self.setMinimumSize(360, 280)
 
     def set_analysis_ready(self, ready: bool) -> None:
         self.analysis_ready = ready
@@ -613,6 +615,12 @@ class QepDiagramWidget(QWidget):
 
     def set_tree_model(self, tree_model: dict) -> None:
         self.tree_model = tree_model
+        ids_by_level, _ = self._collect_levels_and_edges()
+        depth = max(1, len(ids_by_level))
+        max_cols = max((len(level) for level in ids_by_level), default=1)
+        canvas_w = max(360, max_cols * 240 + 120)
+        canvas_h = max(280, depth * 150 + 80)
+        self.setMinimumSize(canvas_w, canvas_h)
         self.update()
 
     # -- layout helpers --
@@ -736,9 +744,20 @@ class QepDiagramWidget(QWidget):
         target_rect = rect.toRect().adjusted(10, 8, -10, -8)
 
         # Keep node labels readable on smaller, non-fullscreen windows by
-        # shrinking the font until the wrapped text fits the node.
-        max_size = 12.0 if self.window().isFullScreen() else 10.5
-        min_size = 8.0
+        # using a lower base font size and then shrinking until text fits.
+        if self.window().isFullScreen():
+            max_size = 12.0
+            min_size = 8.0
+        else:
+            view_w = self.width()
+            max_size = 10.0
+            if view_w < 900:
+                max_size = 9.2
+            if view_w < 760:
+                max_size = 8.6
+            if len(text) > 40:
+                max_size -= 0.4
+            min_size = 7.0
         font = QFont("Segoe UI", weight=QFont.Weight.DemiBold)
         chosen_size = min_size
         size = max_size
@@ -883,7 +902,14 @@ class SqlQepComprehensionUI(QMainWindow):
 
         self.qep_diagram = QepDiagramWidget()
         self.qep_diagram.nodeClicked.connect(self._handle_diagram_node_clicked)
-        self.qep_tabs.addTab(self.qep_diagram, "Visual Tree")
+        self.qep_diagram_scroll = QScrollArea()
+        self.qep_diagram_scroll.setWidgetResizable(True)
+        self.qep_diagram_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.qep_diagram_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.qep_diagram_scroll.setObjectName("QepDiagramScroll")
+        self.qep_diagram_scroll.setWidget(self.qep_diagram)
+        self.qep_diagram_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.qep_tabs.addTab(self.qep_diagram_scroll, "Visual Tree")
         self.qep_tabs.setCurrentIndex(1)
 
         right_layout.addWidget(self.qep_tabs, 1)
@@ -910,9 +936,9 @@ class SqlQepComprehensionUI(QMainWindow):
 
         cards_row = QHBoxLayout()
         cards_row.setSpacing(10)
-        self.what_card, self.what_card_body = self._create_explain_card("WHAT (Execution)")
-        self.why_card,  self.why_card_body  = self._create_explain_card("WHY (Decision)")
-        self.alt_card,  self.alt_card_body  = self._create_explain_card("ALTERNATIVES (Comparison / AQP)")
+        self.what_card, self.what_card_body, _ = self._create_explain_card("WHAT (Execution)")
+        self.why_card,  self.why_card_body,  _ = self._create_explain_card("WHY (Decision)")
+        self.alt_card,  self.alt_card_body, self.alt_card_body_scroll = self._create_explain_card("ALTERNATIVES (Comparison / AQP)")
         self.what_card.setObjectName("WhatCard")
         self.why_card.setObjectName("WhyCard")
         self.alt_card.setObjectName("AltCard")
@@ -930,6 +956,10 @@ class SqlQepComprehensionUI(QMainWindow):
         self.plan_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.plan_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.plan_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.plan_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.plan_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.plan_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.plan_table.setMinimumHeight(120)
         self.plan_table.cellClicked.connect(self._handle_plan_row_clicked)
         self.plan_table.verticalHeader().setVisible(False)
         self.plan_table.horizontalHeader().setStretchLastSection(True)
@@ -958,6 +988,58 @@ class SqlQepComprehensionUI(QMainWindow):
             QStatusBar { background: #eef2f8; border-top: 1px solid #dbe3ef; font-size: 12px; }
             QStackedWidget, QTextEdit, QTreeWidget, QPlainTextEdit, QTextBrowser {
                 background: #ffffff; border: 1px solid #dbe3ef; border-radius: 10px;
+            }
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollArea#QepDiagramScroll {
+                background: #f8fbff;
+                border: 1px solid #cfd9e8;
+                border-radius: 8px;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #b9c9df;
+                min-height: 28px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #96acc8;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                width: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+            QScrollBar:horizontal {
+                background: transparent;
+                height: 10px;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #b9c9df;
+                min-width: 28px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #96acc8;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                height: 0px;
+                width: 0px;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: transparent;
+            }
+            QScrollArea > QWidget > QWidget {
+                background: transparent;
             }
             QPlainTextEdit, QTextBrowser, QTextEdit, QTreeWidget {
                 border: 1px solid #cfd9e8; border-radius: 8px; background: #fbfdff;
@@ -992,7 +1074,7 @@ class SqlQepComprehensionUI(QMainWindow):
         lbl.setProperty("role", "panelTitle")
         return lbl
 
-    def _create_explain_card(self, title: str) -> tuple[QFrame, QLabel]:
+    def _create_explain_card(self, title: str) -> tuple[QFrame, QLabel, QScrollArea]:
         card = QFrame()
         card.setProperty("role", "explainCard")
         layout = QVBoxLayout(card)
@@ -1004,9 +1086,16 @@ class SqlQepComprehensionUI(QMainWindow):
         body_lbl.setProperty("role", "explainCardBody")
         body_lbl.setWordWrap(True)
         body_lbl.setTextFormat(Qt.TextFormat.RichText)
+        body_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        body_scroll = QScrollArea()
+        body_scroll.setWidgetResizable(True)
+        body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        body_scroll.setWidget(body_lbl)
+        body_scroll.setFrameShape(QFrame.Shape.NoFrame)
         layout.addWidget(title_lbl)
-        layout.addWidget(body_lbl, 1)
-        return card, body_lbl
+        layout.addWidget(body_scroll, 1)
+        return card, body_lbl, body_scroll
 
     # -----------------------------------------------------------------------
     # Data binding
@@ -1096,8 +1185,11 @@ class SqlQepComprehensionUI(QMainWindow):
             self.alt_card.setVisible(True)
             if not self.qep_diagram.analysis_ready:
                 self.alt_card_body.setText("Run Analyse to generate plan comparison (AQP).")
+                self.alt_card_body_scroll.setVisible(True)
                 self.plan_table.setVisible(False)
                 return
+            self.alt_card_body.setText("")
+            self.alt_card_body_scroll.setVisible(False)
             self.plan_table.setVisible(True)
             if self.plan_table.rowCount() == 0:
                 self._populate_plan_comparison_table()
@@ -1138,7 +1230,6 @@ class SqlQepComprehensionUI(QMainWindow):
                 self.plan_table.setItem(idx, c, item)
         if rows:
             self.plan_table.selectRow(0)
-        self._fit_plan_table_height()
 
     def _handle_plan_row_clicked(self, _row: int, _col: int) -> None:
         pass  # reserved for future per-row detail expansion
@@ -1229,6 +1320,7 @@ class SqlQepComprehensionUI(QMainWindow):
         self.qep_tree.setEnabled(True)
         self.qep_diagram.set_analysis_ready(True)
         self.qep_diagram.set_active(None)
+        self._refresh_explanation_ui()
         self.analyse_btn.setEnabled(True)
         self.statusBar().showMessage("Analysis complete. Click an annotation or QEP node.")
 
